@@ -22,23 +22,23 @@ uint8_t* pack_message(uint8_t type, const char* msg, uint32_t* out_len)
  * @brief 封包验证函数(魔数是否正确，数据是否完整)
  * @param packet 要验证的封包
  * @param recv_len 接收的字节数
- * @return 1：验证成功, -1：验证失败, -2:数据不完整
+ * @return 1：验证成功, MAGIC_FAILED：验证失败, INCOMPLETE_DATA:数据不完整
  */
 static int is_valid_packet(const uint8_t* packet, uint32_t recv_len)
 {
     //是否有协议头
     if(recv_len < sizeof(protocol_header_t))
-        return -2;
+        return INCOMPLETE_DATA;
 
     //校验魔数
     protocol_header_t* ptr = (protocol_header_t*)packet;
     if(ntohs(ptr->magic) != MAGIC)
-        return -1;
+        return MAGIC_FAILED;
 
     //数据是否完整
     uint32_t msg_len = ntohl(ptr->len);
     if(recv_len < sizeof(protocol_header_t) + msg_len)
-        return -2;
+        return INCOMPLETE_DATA;
 
     return 1;
 }
@@ -62,5 +62,5 @@ int unpack_message(const uint8_t* packet, uint32_t recv_len, uint8_t* type, char
     (*out_msg)[data_len] = '\0';
 
     *consumed = sizeof(protocol_header_t) + data_len;
-    return 1;
+    return UNPACK_SUCCESS;
 }

@@ -54,7 +54,7 @@ void* recv_thread(void* arg)
     while(1)
     {
         int ret = recv(sockfd, recv_buf + recv_len, sizeof(recv_buf) - recv_len, 0);
-        if(ret <= 0)
+        if(ret < 0)
         {
             perror("无法接收服务器数据");
             close(sockfd);

@@ -8,6 +8,7 @@
 int main()
 {
     load_config("./config/gateway.conf");
+    config_print();
     open_logfile();
     int flag = ini_server();
     if(flag < 0)

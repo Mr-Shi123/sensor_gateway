@@ -34,8 +34,8 @@ void* work_thread(void *arg)
 
 void start_thread()
 {
-    //开3个线程:
-    int thread_cnt = 3;
+    //开启数据库线程:
+    int thread_cnt = 1;
     for(int i = 0; i < thread_cnt; i++)
     {
         pthread_t t;

@@ -27,6 +27,10 @@ typedef struct {
  */
 uint8_t* pack_message(uint8_t type, const char* msg, uint32_t* out_len);
 
+
+#define UNPACK_SUCCESS 1
+#define MAGIC_FAILED -1
+#define INCOMPLETE_DATA -2
 /**
  * @brief 解包函数，获取包中的数据类型和数据
  * @param packet 要解析的包
@@ -34,7 +38,7 @@ uint8_t* pack_message(uint8_t type, const char* msg, uint32_t* out_len);
  * @param type 保存数据类型结果
  * @param out_msg 保存数据结果
  * @param consumed 已处理字节数
- * @return 1：解包成功, -1：魔数验证失败, -2:数据不完整
+ * @return UNPACK_SUCCESS：解包成功, MAGIC_FAILED：魔数验证失败, INCOMPLETE_DATA:数据不完整
  */
 int unpack_message(const uint8_t* packet, uint32_t recv_len, uint8_t* type, char** out_msg, int* consumed);
 

@@ -51,7 +51,7 @@ void load_config(const char* config_filename)
 
         if(strcmp(k, "port") == 0)
             g_config.server_config.port = atoi(v);
-        else if(strcmp(k, "max_client") == 0)
+        else if(strcmp(k, "max_sensors") == 0)
             g_config.server_config.max_sensors = atoi(v);
         else if(strcmp(k, "heartbeat_timeout") == 0)
             g_config.server_config.heartbeat_timeout = atoi(v);
@@ -66,5 +66,4 @@ void load_config(const char* config_filename)
     }
 
     printf("配置文件加载完成\n");
-    config_print();
 }
