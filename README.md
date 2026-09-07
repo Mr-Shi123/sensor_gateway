@@ -286,6 +286,7 @@ cd sensor_gateway/tools/stress/
 ./stress_sensor 100 10 1
 ```
 在1分钟后将会显示测试结果：
+
 <img src="./images/7-3.gif" width="500">
 
 
