@@ -18,7 +18,7 @@
 
 #define MAX_SENSOR_CNT 1000
 
-static const char *ip = "172.20.89.244";
+static const char *ip = "127.0.0.1";
 static int sensor_cnt = 0;
 static int sleep_time = 0;
 static int duration = 0;

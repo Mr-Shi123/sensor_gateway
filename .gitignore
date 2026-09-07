@@ -2,7 +2,19 @@ build/
 *.o
 *.a
 *.so
-*.db
-*.log
+*.exe
+*.out
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# VSCode
+.vscode/
+
 core
 core.*
+
+*.db

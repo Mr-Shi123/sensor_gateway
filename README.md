@@ -35,40 +35,8 @@
 
 整体数据流如下：
 
-```text
-                         +----------------------+
-                         |      stress_sensor   |
-                         |    压力测试程序       |
-                         +----------+-----------+
-                                    |
-                         多个 TCP 传感器连接
-                                    |
-                                    v
-+----------------+        +----------------------+
-|  sim_sensor    | -----> |      Gateway         |
-|  模拟传感器     |  TCP   |                      |
-+----------------+        |  epoll / TCP Server  |
-                          +----------+-----------+
-                                     |
-                                     | unpack_message()
-                                     v
-                              +-------------+
-                              | Thread-safe  |
-                              |    Queue     |
-                              +------+-------+
-                                     |
-                                     | pop()
-                                     v
-                              +-------------+
-                              | DB Worker    |
-                              |  pthread     |
-                              +------+-------+
-                                     |
-                                     v
-                              +-------------+
-                              |   SQLite DB  |
-                              +-------------+
-```
+
+<img src="./images/2.1.png" width="1000">
 
 ### 网络线程
 
@@ -79,7 +47,7 @@ accept
   -> epoll
   -> recv
   -> 接收缓冲区
-  -> unpack_message
+  -> unpack_message(解包提取)
   -> 根据消息类型处理
   -> push(queue)
 ```
@@ -94,7 +62,7 @@ pop(queue)
   -> SQLite INSERT
 ```
 
-项目当前采用生产者/消费者模型：网络线程负责生产数据，数据库工作线程负责消费数据。
+项目当前采用生产者/消费者模型：网络线程负责生产数据，数据库工作线程负责消费数据
 
 ---
 
@@ -112,8 +80,12 @@ sensor_gateway/
 │   ├── protocol.h
 │   ├── queue.h
 │   ├── server.h
+│   ├── stress_control.h
 │   ├── thread.h
 │   └── utils.h
+│
+├── log/
+│    └── gateway.log    
 │
 ├── src/
 │   ├── config.c              # 配置文件解析
@@ -129,178 +101,21 @@ sensor_gateway/
 │
 ├── tools/
 │   ├── sim/
-│   │   ├── gcc.sh            # 模拟传感器编译脚本
+│   │   ├── compile_sim.sh    # 模拟传感器编译脚本
 │   │   └── sim_sensor.c      # 单个模拟传感器
 │   │
 │   └── stress/
-│       ├── gcc.sh            # 压力测试编译脚本
+│       ├── compile_stress.sh # 压力测试编译脚本
 │       └── stress_sensor.c   # 多传感器压力测试程序
-│
+|
+├── compile_gateway.sh                # 网关编译脚本
 ├── CMakeLists.txt
-├── toolchain.cmake
 └── README.md
 ```
 
-> 如果实际工程中还有额外的测试文件或头文件，以当前源码目录为准。
-
 ---
 
-## 4. 主要模块说明
-
-### 4.1 `server.c`
-
-负责服务器核心网络功能：
-
-- 创建监听 socket
-- `bind()` / `listen()`
-- 设置非阻塞 socket
-- 创建 `epoll`
-- 接受传感器连接
-- 使用 ET 模式处理 `recv()`
-- 维护传感器列表
-- 处理连接超时
-- 解析传感器协议数据
-
-服务器接收数据时，不依赖一次 `recv()` 对应一个完整协议包，而是先存入传感器自己的 `recv_buf`。
-
-```text
-recv()
-  |
-  v
-recv_buf
-  |
-  v
-unpack_message()
-  |
-  +---- -2：数据不完整 -> 等待下一次 recv
-  |
-  +---- -1：无效协议 -> 断开连接
-  |
-  +---- 成功 -> 处理完整协议包
-```
-
-### 4.2 `protocol.c`
-
-负责协议封装和解析。
-
-核心功能：
-
-```c
-pack_message()
-unpack_message()
-```
-
-协议设计包含协议头和 payload，并通过长度字段确定一个完整协议包的边界，从而处理 TCP 粘包和拆包。
-
-### 4.3 `queue.c`
-
-实现线程安全消息队列。
-
-使用：
-
-- `pthread_mutex_t`
-- 条件变量
-- `push()`
-- `pop()`
-
-网络线程向队列生产消息，数据库线程从队列消费消息。
-
-### 4.4 `thread.c`
-
-负责数据库工作线程。
-
-主要流程：
-
-```text
-pop()
-  -> 收集 batch
-  -> insert_into_db()
-```
-
-通过批量写入减少数据库操作次数。
-
-### 4.5 `database.c`
-
-负责 SQLite 数据库：
-
-- 打开数据库
-- 创建/使用数据表
-- 插入传感器数据
-- 查询数据
-- 事务处理
-
-### 4.6 `config.c`
-
-读取 `config/gateway.conf`，初始化全局配置 `g_config`。
-
-典型配置包括：
-
-```text
-server_config.port
-server_config.max_sensors
-server_config.heartbeat_timeout
-queue_config.max_size
-queue_config.batch_size
-database_config.db_file
-log_config.log_file
-```
-
----
-
-## 5. 编译
-
-### 5.1 使用 CMake
-
-进入项目目录：
-
-```bash
-cd sensor_gateway
-```
-
-创建并进入构建目录：
-
-```bash
-mkdir -p build
-cd build
-```
-
-配置：
-
-```bash
-cmake ..
-```
-
-编译：
-
-```bash
-make -j$(nproc)
-```
-
-生成的网关程序通常位于：
-
-```text
-build/bin/gateway
-```
-
-### 5.2 编译前提
-
-需要安装：
-
-- GCC
-- CMake
-- pthread
-- SQLite3 开发库
-
-Ubuntu 示例：
-
-```bash
-sudo apt update
-sudo apt install build-essential cmake libsqlite3-dev
-```
-
----
-
-## 6. 配置文件
+## 4. 配置文件
 
 配置文件：
 
@@ -320,8 +135,6 @@ db_file=sensor_data.db
 log_file=./log/gateway.log
 ```
 
-实际键名以 `config.c` 中的配置解析代码和当前 `gateway.conf` 为准。
-
 其中比较重要的参数：
 
 ### `port`
@@ -336,107 +149,160 @@ log_file=./log/gateway.log
 
 ### `max_sensors`
 
-允许的最大传感器连接数量。
+允许的最大传感器连接数量
 
 ### `heartbeat_timeout`
 
-传感器超过该时间没有操作时，服务器会主动断开连接。
+传感器超过该时间没有操作时，服务器会主动断开连接
 
 ### `queue_max_size`
 
-消息队列最大容量。
+消息队列最大容量
 
-如果生产速度长期高于消费速度，队列可能逐渐增长并最终达到上限。
+如果生产速度长期高于消费速度，队列可能逐渐增长并最终达到上限
 
 ### `batch_size`
 
-数据库线程一次批量处理的数据量。
+数据库线程一次批量处理的数据量
 
 ---
 
-## 7. 启动 Gateway
+## 5. TCP 粘包和拆包处理
 
-根据构建目录运行，例如：
+TCP 是字节流协议，`send()` 的次数和 `recv()` 的次数没有一一对应关系
+- 传感器发送数据`Temp:25,Hum:60` 和 `Temp:26,Hum:61`
+- 网关服务器可能一次 recv 收到 `Temp:25,Hum:60Temp:26,Hum:61`（粘在一起），也可能只收到 `Temp:25,Hum:6`（被拆开）
 
+因此设计了**定长头 + 变长体**的数据包结构
+
+<img src="./images/5.1.png" >
+
+---
+
+## 6. 编译
+### 6.1 编译网关
 ```bash
+# 进入项目目录
+cd sensor_gateway/
+
+# 执行编译网关脚本
+bash compile_gateway.sh
+```
+
+### 6.2 编译模拟传感器
+```bash
+# 进入项目工具包下的模拟传感器目录
+cd sensor_gateway/tools/sim/
+
+# 执行模拟传感器编译脚本
+bash compile_sim.sh
+```
+
+### 6.3 编译压力测试程序
+```bash
+# 进入项目工具包下的压力测试目录
+cd sensor_gateway/tools/stress/
+
+# 执行压力测试的编译脚本
+bash compile_stress.sh
+```
+
+---
+
+## 7. 启动
+⚠️**注意**：必须先启动网关，再进行模拟传感器的连接和压力测试。模拟传感器连接和压力测试相互独立不能同时运行，避免干扰压力测试结果
+
+### 7.1 启动网关
+开启一个终端:
+```bash
+# 保证在项目的根目录下
+cd sensor_gateway/
+
+# 启动网关程序
 ./build/bin/gateway
 ```
 
-启动后会监听配置文件中的端口。
+### 7.2 启动模拟传感器
+
+用于模拟一个真实传感器客户端，与网关建立 TCP 连接。下面是操作步骤：
+
+在启动网关后，另外开启一个新的终端:
+```bash
+# 进入项目工具包下的模拟传感器目录
+cd sensor_gateway/tools/sim/
+
+# 启动程序
+./sim_sensor
+```
+连接成功后，会收到网关发来的反馈：`您已成功与服务器连接!`
+接下来可以发送不同类型的协议消息
+
+#### 7.2.1 上传数据
+向网关上传传感器温度`Temp`和湿度`Hum`数据，随后由网关将数据写入`SQLite`数据库
+命令格式:
+```bash
+Temp:xx.xx, Hum:xx.xx
+```
+例如：
+```bash
+# 温度为12.3℃， 湿度为45.6%
+Temp:12.3, Hum:45.6
+```
+
+#### 7.2.2 查询数据
+向网关发送`get_data`指令，网关会将`SQLite`数据库里的传感器数据返回:
+返回的数据格式：
+| 主键id | 上传时间 | 温度 | 湿度
+
+<img src="./images/7-2-2.gif" width="500">
+
+#### 7.2.3 延长心跳时间
+一般心跳时间为配置文件中的`heartbeat_timeout`, 传感器连接网关后长时间无操作，超过心跳时间网关会自动与该传感器断开连接
 
 例如：
+当前在配置文件`gateway.conf`中设置心跳时间`heartbeat_timeout`为60s
+在60s内传感器无操作：
+<img src="./images/7-2-3.1.gif" width="500" height="300">
 
-```text
-服务器启动成功, 端口 9090
-```
+可以通过输入`PING`指令，将该传感器的心跳时间延长为原来的一倍(120s)，仅本次有效
 
----
+<img src="./images/7-2-3.2.gif" width="500" height="300">
 
-## 8. 模拟传感器
+### 7.3 启动压力测试
+⚠️**注意**：必须保证当前无传感器连接网关，否则会影响压力测试结果
 
-模拟传感器位于：
-
-```text
-tools/sim/sim_sensor.c
-```
-
-它用于模拟一个真实传感器客户端，建立 TCP 连接后可以发送不同类型的协议消息。
-
-典型流程：
-
-```text
-sim_sensor
-    |
-    +--> connect Gateway
-    |
-    +--> SENSOR_DATA_TYPE
-    |
-    +--> GET_DATA_TYPE
-    |
-    +--> PING_TYPE
-    |
-    +--> 接收服务器反馈
-```
-
-编译脚本：
-
+在启动网关后，另外开启一个新的终端:
 ```bash
-cd tools/sim
-./gcc.sh
+# 进入项目工具包下的压力测试目录
+cd sensor_gateway/tools/stress/
+
+# 启动压力测试程序
+./stress_sensor <传感器数量>  <传感器上传数据间隔(s)>  <测试时长(min)>
 ```
 
-然后按照程序支持的参数启动模拟传感器。
+例如：
+```bash
+# 连接 100 台传感器， 每台传感器上传间隔 10 s, 持续 1 min
+./stress_sensor 100 10 1
+```
+在1分钟后将会显示测试结果：
+<img src="./images/7-3.gif" width="500">
+
 
 ---
 
-## 9. 压力测试
 
-压力测试程序位于：
 
-```text
-tools/stress/stress_sensor.c
-```
+## 8. 网关压力测试
 
-设计方式是：
+压力测试设计方式是：
 
-```text
-stress_sensor
-├── sensor 0 socket
-├── sensor 1 socket
-├── sensor 2 socket
-├── ...
-├── sensor N socket
-│
-└── control socket
-```
+<img src="./images/8.1.png" width="900">
 
-每一个传感器线程拥有自己的 TCP 连接，并按照指定时间间隔发送传感器数据。
+1.有N个传感器就创建N个线程，每一个传感器线程拥有自己的 TCP 连接，端口为：9090,并按照指定时间间隔发送传感器数据。
+2.单独创建一个控制线程，TCP连接端口为：9091, 负责控制测试的开始、测试的结束和测试数据的统计
 
-控制连接用于：
 
-- 开始测试
-- 结束测试
-- 查询服务器本次测试期间成功接收的协议包数量
 
 压力测试结果重点观察三个指标：
 
@@ -446,538 +312,15 @@ stress_sensor
 数据库插入数
 ```
 
-这三个数字分别对应：
+### 压力测试结果
+进行了 **1000** 台传感器连接， 每隔 **1** s上传数据， 持续 **5** min的**多数量连接**，**高消息压力**的测试。
 
-```text
-stress_sensor
-      |
-      | send_all() 成功
-      v
-实际发送数
-      |
-      | TCP
-      v
-Gateway unpack_message() 成功
-      |
-      v
-服务器接收数
-      |
-      | Queue -> DB worker
-      v
-数据库插入数
-```
+<img src="./images/8.3.png">
 
-### 压力测试示例
+在本次测试中:
 
-例如：
+1.网关能够同时维持 **1000 个传感器 TCP 连接**，没有出现连接建立失败或发送阶段错误
+2.**发送数：299968, 接收数:299968, 两者完全一致，数据接收率：100%**，传感器发送的协议消息全部被网关成功接收并完成协议解析
+3.**接收数:299968，数据库插入数:299968**,在`Queue->DB Worker->SQLite`这一数据链路上没有发生数据丢失
 
-```bash
-./stress_sensor 100 10 1
-```
-
-参数含义：
-
-```text
-100   -> 100 个传感器连接
-10    -> 每 10 秒发送一条消息
-1     -> 持续 1 分钟
-```
-
-测试完成后，重点观察：
-
-```text
-===============测试总结===============
-实际发送数: xxx
-服务器接收数: xxx
-数据库插入数: xxx
-====================================
-```
-
-### 压力测试建议
-
-建议逐渐增加压力，而不是一开始就直接拉到极限：
-
-```text
-10 个连接
-  ↓
-30 个连接
-  ↓
-60 个连接
-  ↓
-90 个连接
-  ↓
-100 个连接
-```
-
-然后逐渐提高消息频率：
-
-```text
-10 秒/条
-  ↓
-5 秒/条
-  ↓
-1 秒/条
-  ↓
-更高发送频率
-```
-
-重点观察：
-
-- 发送失败数
-- 服务器接收数
-- 数据库插入数
-- Queue 长度
-- CPU 使用率
-- 内存使用量
-- 文件描述符数量
-- 是否出现连接断开
-- 是否出现协议解析错误
-- 是否出现数据库错误
-
----
-
-## 10. 压力测试结果的判断
-
-### 正常情况
-
-例如：
-
-```text
-实际发送数: 600
-服务器接收数: 600
-数据库插入数: 600
-```
-
-表示从客户端发送到服务器解析，再到数据库落盘，数量一致。
-
-### 服务器接收数小于实际发送数
-
-例如：
-
-```text
-实际发送数: 600
-服务器接收数: 590
-数据库插入数: 590
-```
-
-优先检查：
-
-- TCP 连接是否异常断开
-- `recv()` / `epoll` 处理
-- 接收缓冲区是否溢出
-- `unpack_message()` 是否解析失败
-- 客户端发送是否真正完成整个协议包
-
-### 数据库插入数小于服务器接收数
-
-例如：
-
-```text
-实际发送数: 600
-服务器接收数: 600
-数据库插入数: 580
-```
-
-优先检查：
-
-- Queue 是否积压
-- 数据库 worker 是否处理不及时
-- SQLite 插入错误
-- 事务提交情况
-- 测试结束时数据库线程是否还有未消费的数据
-
-由于项目使用生产者/消费者模型，服务器接收完成并不代表数据库已经立即完成写入。
-
----
-
-## 11. TCP 粘包和拆包处理
-
-TCP 是字节流协议，`send()` 的次数和 `recv()` 的次数没有一一对应关系。
-
-例如一个客户端连续发送：
-
-```text
-A
-B
-C
-```
-
-服务器可能一次 `recv()` 收到：
-
-```text
-ABC
-```
-
-也可能分多次收到：
-
-```text
-A
-BC
-```
-
-项目通过以下方式解决：
-
-```text
-TCP recv()
-    ↓
-传感器 recv_buf
-    ↓
-unpack_message()
-    ↓
-根据协议长度判断完整包
-    ↓
-memmove() 保留剩余字节
-```
-
-因此：
-
-- 一个 `recv()` 可以包含多个协议包
-- 一个协议包也可以跨多个 `recv()`
-
-统计服务器“收到多少条消息”时，应统计**成功解包的完整协议包数量**，而不是 `recv()` 调用次数。
-
----
-
-## 12. 调试与内存检查
-
-### 12.1 GDB
-
-建议使用带调试信息的构建：
-
-```bash
-gcc -g -O0 ...
-```
-
-常用命令：
-
-```gdb
-break main
-run
-next
-step
-continue
-bt
-frame
-info locals
-print variable
-info threads
-thread apply all bt
-```
-
-### 12.2 Core Dump
-
-允许生成 Core：
-
-```bash
-ulimit -c unlimited
-```
-
-检查：
-
-```bash
-cat /proc/sys/kernel/core_pattern
-```
-
-如果程序崩溃并生成 core，可以使用：
-
-```bash
-gdb ./gateway core
-```
-
-进入后：
-
-```gdb
-bt
-```
-
-查看崩溃调用栈。
-
-### 12.3 Valgrind
-
-运行：
-
-```bash
-valgrind --leak-check=full --show-leak-kinds=all ./build/bin/gateway
-```
-
-重点关注：
-
-```text
-definitely lost
-indirectly lost
-possibly lost
-still reachable
-```
-
-其中 `definitely lost` 是优先级最高的内存泄漏问题。
-
-### 12.4 AddressSanitizer
-
-可以在 CMake 中加入：
-
-```text
--fsanitize=address
--fno-omit-frame-pointer
-```
-
-例如：
-
-```cmake
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -g -O0 -fsanitize=address -fno-omit-frame-pointer -pthread")
-```
-
-ASan 适合检查：
-
-- heap-buffer-overflow
-- stack-buffer-overflow
-- use-after-free
-- double-free 等
-
-### 12.5 ThreadSanitizer
-
-检查线程数据竞争：
-
-```text
--fsanitize=thread
-```
-
-适合检查：
-
-- data race
-- 多线程共享变量未同步
-
----
-
-## 13. 典型问题记录
-
-### 13.1 `%[^:]` 缓冲区溢出
-
-类似：
-
-```c
-char name1[32];
-sscanf(data, "%[^:]:%lf", name1, &temp);
-```
-
-`%[^:]` 没有限制输入长度，可能写爆 `name1`。
-
-更安全的写法：
-
-```c
-sscanf(data, "%31[^:]:%lf", name1, &temp);
-```
-
-原因：
-
-```text
-数组大小 = 32
-最大写入字符 = 31
-最后 1 个字节留给 '\0'
-```
-
-### 13.2 `accept()` 返回 `EAGAIN`
-
-服务器使用非阻塞 socket + ET 模式时，循环 `accept()` 直到没有连接可取是正常做法。
-
-推荐判断：
-
-```c
-if (sensorfd < 0)
-{
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
-        break;
-
-    // 真正的 accept 错误
-}
-```
-
-`EAGAIN` 在这里不是异常，而是说明当前监听 socket 已经没有更多连接可接受。
-
-### 13.3 `SO_REUSEADDR`
-
-服务器可以在 `bind()` 前设置：
-
-```c
-int reuse = 1;
-setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-```
-
-主要用于服务器重启时更方便重新绑定相同的本地地址和端口。
-
----
-
-## 14. Git 使用
-
-初始化仓库：
-
-```bash
-git init
-```
-
-查看状态：
-
-```bash
-git status
-```
-
-提交：
-
-```bash
-git add .
-git commit -m "commit message"
-```
-
-查看日志：
-
-```bash
-git log --oneline --decorate
-```
-
-创建并切换分支：
-
-```bash
-git switch -c debug
-```
-
-切换分支：
-
-```bash
-git switch master
-```
-
-合并：
-
-```bash
-git merge debug
-```
-
-撤销工作区修改：
-
-```bash
-git restore <file>
-```
-
-撤销暂存：
-
-```bash
-git restore --staged <file>
-```
-
-安全撤销一个已经提交的 commit：
-
-```bash
-git revert <commit>
-```
-
-查看 HEAD 移动历史：
-
-```bash
-git reflog
-```
-
----
-
-## 15. 开发与测试建议
-
-建议按下面的顺序进行：
-
-```text
-功能正确性
-    ↓
-GDB 调试
-    ↓
-Core Dump
-    ↓
-Valgrind / ASan
-    ↓
-多线程检查
-    ↓
-基础压力测试
-    ↓
-提高并发连接数
-    ↓
-提高消息发送速率
-    ↓
-观察 Queue / CPU / 内存 / DB
-    ↓
-定位性能瓶颈
-```
-
-做压力测试时，不建议一开始就使用 Valgrind 进行极限压力测试，因为 Valgrind 会明显降低程序运行速度。更适合先用普通构建建立性能基线，再使用 ASan、Valgrind、TSan 对特定问题进行定位。
-
----
-
-## 16. 当前压力测试的核心指标
-
-对于本项目，最重要的三个结果是：
-
-```text
-实际发送数
-服务器接收数
-数据库插入数
-```
-
-理想情况下：
-
-```text
-实际发送数 = 服务器接收数 = 数据库插入数
-```
-
-随着压力提高，重点观察第一个开始出现差异的位置。
-
-同时建议观察：
-
-```text
-CPU
-内存
-Queue 当前长度
-Queue 最大长度
-数据库写入速度
-连接成功/失败数量
-socket FD 数量
-错误日志
-```
-
----
-
-## 17. 后续可扩展方向
-
-可以继续增加：
-
-- 每个传感器的 `sensor_id`
-- 每个传感器的消息序号 `sequence`
-- 严格的消息丢失检测
-- P50 / P95 / P99 延迟统计
-- Queue 最大长度统计
-- Queue 阻塞次数统计
-- 数据库成功/失败计数
-- 控制连接查询更多运行时指标
-- 更高并发连接压力测试
-- 更高消息速率压力测试
-- 优雅退出与线程回收
-- 更完善的日志等级和日志轮转
-
----
-
-## 18. 项目定位
-
-这个项目既可以作为一个简单的传感器网关练习，也可以作为 Linux 网络编程、并发编程、故障排查、性能分析和压力测试的综合实践项目。
-
-核心技术栈：
-
-```text
-C
-Linux
-TCP/IP
-socket
-epoll
-pthread
-mutex / condition variable
-SQLite
-CMake
-GDB
-Valgrind
-ASan
-TSan
-Git
-```
+因此，在本次测试条件下，网关能够稳定处理 **1000 个并发 TCP 连接和约 1000 条/秒的传感器数据上传压力**
